@@ -104,10 +104,10 @@ class OxfordIIITPetDataset(Dataset):
                 class_id = int(parts[1]) - 1 # convert to 0-based (1..37 → 0..36)
                 all_samples.append((stem, class_id))
 
-        # deterministic split: 80% train, 10% val, 10% test
+        # deterministic split: 85% train, 15% val, 0% test
         n = len(all_samples)
-        train_end = int(0.8 * n)
-        val_end   = int(0.9 * n)
+        train_end = int(0.85 * n)
+        val_end   = int(n)
 
         if split == "train":
             self.samples = all_samples[:train_end]

@@ -3,9 +3,9 @@
 
 import torch
 import torch.nn as nn
-from models import VGG11Encoder
+from .vgg11 import VGG11Encoder
 from losses import IoULoss
-from models import CustomDropout
+from .layers import CustomDropout
 
 
 class LocalizationHead(nn.Module):
@@ -48,7 +48,8 @@ class LocalizationHead(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight)
-                nn.init.zeros_(m.bias)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
