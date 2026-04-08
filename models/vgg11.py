@@ -5,6 +5,7 @@ from typing import Dict, Tuple, Union
 
 import torch
 import torch.nn as nn
+from torchvision.models import vgg11_bn, VGG11_BN_Weights
 
 def _conv_bn_relu(ch_in, ch_out, kernel_size = 3, padding=1):
     """3 x 3 block with Conv --> BatchNorm2d --> ReLU"""    
@@ -21,7 +22,7 @@ class VGG11Encoder(nn.Module):
     """VGG11-style encoder with optional intermediate feature returns.
     """
 
-    def __init__(self, in_channels: int = 3):
+    def __init__(self, in_channels: int = 3, pretrained = True):
         """Initialize the VGG11Encoder model."""
         super().__init__()
 
@@ -53,8 +54,41 @@ class VGG11Encoder(nn.Module):
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
-        self._init_weights()
+        if pretrained:
+            self._load_pretrained_weights()
+        else:
+            self._init_weights()
     
+    def _load_pretrained_weights(self):
+        """Loads weights from torchvision's vgg11_bn."""
+        print("Loading ImageNet weights for VGG11Encoder...")
+        vgg_imagenet = vgg11_bn(weights=VGG11_BN_Weights.IMAGENET1K_V1)
+        
+        # Flatten our custom blocks into a single list of layers
+        custom_layers = []
+        for block in [self.block1, self.block2, self.block3, self.block4, self.block5]:
+            for layer in block.children():
+                if isinstance(layer, nn.Sequential):
+                    custom_layers.extend(list(layer.children()))
+                else:
+                    custom_layers.append(layer)
+        
+        # Flatten torchvision's features into a list
+        std_layers = list(vgg_imagenet.features.children())
+        
+        # Map parameters layer by layer
+        for custom_layer, std_layer in zip(custom_layers, std_layers):
+            if isinstance(custom_layer, nn.Conv2d) and isinstance(std_layer, nn.Conv2d):
+                custom_layer.weight.data = std_layer.weight.data.clone()
+                # Note: Our convs have bias=False, standard VGG might have bias=True.
+                # Since we use BN right after, ignoring the standard bias is mathematically safe.
+            
+            elif isinstance(custom_layer, nn.BatchNorm2d) and isinstance(std_layer, nn.BatchNorm2d):
+                custom_layer.weight.data = std_layer.weight.data.clone()
+                custom_layer.bias.data = std_layer.bias.data.clone()
+                custom_layer.running_mean.data = std_layer.running_mean.data.clone()
+                custom_layer.running_var.data = std_layer.running_var.data.clone()
+
     def _init_weights(self):
         """
         Do He/Kaiming Initialization for conv layers

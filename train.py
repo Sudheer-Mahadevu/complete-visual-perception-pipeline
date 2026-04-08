@@ -1,7 +1,7 @@
 """Training entrypoint
 """
 import torch
-from data.pets_dataset import build_dataloaders
+from data.pets_dataset_aug import build_dataloaders
 from models import VGG11Classifier
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -32,6 +32,7 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler):
             loss = loss_fn(logits, labels)
             loss.backward()
             optimizer.step()
+        # print("Hi")
         
         total_loss += loss.item() * images.size(0)
         preds = logits.argmax(dim=1)

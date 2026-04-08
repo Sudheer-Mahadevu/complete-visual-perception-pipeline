@@ -89,7 +89,7 @@ class VGG11Classifier(nn.Module):
         x = feat.block5(x);  out["block5"] = x
 
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
+        # x = torch.flatten(x, 1)
         x = self.classifier(x)
         out["logits"] = x
         return out
