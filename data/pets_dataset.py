@@ -1,20 +1,3 @@
-"""
-Oxford-IIIT Pet Dataset loader.
-
-Loads images along with:
-  - class label  (37 breed indices, 0-based)
-  - bounding box (cx, cy, w, h) normalised to [0,1]
-  - segmentation trimap (H×W long tensor; values 0=background, 1=foreground, 2=boundary)
-
-Directory layout expected (standard Oxford-IIIT download):
-    root/
-      images/          *.jpg
-      annotations/
-        list.txt       (filename class_id species breed_id)
-        trimaps/       *.png
-        xmls/          *.xml  (head bounding boxes)
-"""
-
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -22,11 +5,10 @@ from PIL import Image
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
+from torchvision.datasets import OxfordIIITPet
+from torch.utils.data import DataLoader, random_split
 
-
-# helpers
 
 def _parse_bbox_xml(xml_path: str, img_w: int, img_h: int):
     """Return (cx, cy, w, h) in [0,1] from a VOC-style XML annotation."""
@@ -36,30 +18,30 @@ def _parse_bbox_xml(xml_path: str, img_w: int, img_h: int):
     if bndbox is None:
         # fall back to full-image box if annotation is missing
         return (0.5, 0.5, 1.0, 1.0)
+    
     xmin = float(bndbox.find("xmin").text)
     ymin = float(bndbox.find("ymin").text)
     xmax = float(bndbox.find("xmax").text)
     ymax = float(bndbox.find("ymax").text)
+    
     cx = ((xmin + xmax) / 2) / img_w
     cy = ((ymin + ymax) / 2) / img_h
     w  = (xmax - xmin) / img_w
     h  = (ymax - ymin) / img_h
+    
     return (cx, cy, w, h)
 
 
-# dataset class
-
-class OxfordIIITPetDataset(Dataset):
-    """Oxford-IIIT Pet multi-task dataset loader.
+class MultiTaskPetDataset(OxfordIIITPet):
+    """Oxford-IIIT Pet multi-task dataset loader wrapping torchvision's implementation.
 
     Args:
-        root         : path to the dataset root (contains images/ and annotations/)
-        split        : 'train' | 'val' | 'test'
-        img_size     : square size to resize images to (default 224)
-        transform    : optional callable applied to the PIL image BEFORE
-                       conversion to tensor; e.g. albumentations pipeline.
-        augment      : if True applies random horizontal flip + colour jitter
-                       (only meaningful when transform is None)
+        root         : path where the dataset will be saved/downloaded.
+        split        : 'trainval' | 'test' (standard torchvision splits).
+        img_size     : square size to resize images to (default 224).
+        transform    : optional callable applied to the PIL image BEFORE tensor conversion.
+        augment      : if True applies random horizontal flip (only meaningful when transform is None).
+        download     : if True, downloads the dataset from the internet and puts it in root.
     """
 
     # Trimap pixel values → class index mapping
@@ -68,110 +50,66 @@ class OxfordIIITPetDataset(Dataset):
     def __init__(
         self,
         root: str,
-        split: str = "train",
+        split: str = "trainval",
         img_size: int = 224,
-        transform=None,
+        transform = None,
         augment: bool = False,
+        download: bool = True
     ):
-        super().__init__()
-        self.root      = Path(root)
-        self.split     = split
+        # target_types=['category', 'segmentation'] fetches both label and mask
+        super().__init__(root, split=split, target_types=['category', 'segmentation'], download=download)
+        
         self.img_size  = img_size
-        self.transform = transform
+        self.custom_transform = transform
         self.augment   = augment and (transform is None)
 
-        self.img_dir     = self.root / "images"
-        self.mask_dir    = self.root / "annotations" / "trimaps"
-        self.xml_dir     = self.root / "annotations" / "xmls"
-        list_file        = self.root / "annotations" / "list.txt"
+        # torchvision extracts files to root/oxford-iiit-pet/
+        self.base_folder = Path(self._base_folder)
+        self.xml_dir = self.base_folder / "annotations" / "xmls"
 
-        self.samples   = []   # list of (stem, class_idx)
-        self._load_list(list_file, split)
+    def __getitem__(self, idx: int):
+        # 1. Fetch image, class index, and raw trimap mask from base torchvision class
+        img, (class_idx, mask) = super().__getitem__(idx)
+        
+        # We extract the stem from torchvision's internal image path list to find the matching XML
+        img_path = Path(self._images[idx])
+        stem = img_path.stem
+        orig_w, orig_h = img.size
 
-    #  internal 
-
-    def _load_list(self, list_file: Path, split: str):
-        """Parse list.txt; first 6000 samples → train, rest → val/test split."""
-        all_samples = []
-        with open(list_file) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split()
-                # list.txt format: <Image CLASS-ID SPECIES BREED-ID>
-                stem     = parts[0]          # e.g. Abyssinian_1
-                class_id = int(parts[1]) - 1 # convert to 0-based (1..37 → 0..36)
-                all_samples.append((stem, class_id))
-
-        # deterministic split: 85% train, 15% val, 0% test
-        n = len(all_samples)
-        train_end = int(0.85 * n)
-        val_end   = int(n)
-
-        if split == "train":
-            self.samples = all_samples[:train_end]
-        elif split == "val":
-            self.samples = all_samples[train_end:val_end]
-        else:  # test
-            self.samples = all_samples[val_end:]
-
-    def _load_image(self, stem: str) -> Image.Image:
-        img_path = self.img_dir / f"{stem}.jpg"
-        img = Image.open(img_path).convert("RGB")
-        return img
-
-    def _load_mask(self, stem: str, target_size: int) -> torch.Tensor:
-        """Returns a (H,W) long tensor with values 0,1,2."""
-        mask_path = self.mask_dir / f"{stem}.png"
-        if not mask_path.exists():
-            # return all-background mask if annotation is absent
-            return torch.zeros(target_size, target_size, dtype=torch.long)
-        mask = Image.open(mask_path)
-        mask = mask.resize((target_size, target_size), Image.NEAREST)
-        mask_np = np.array(mask, dtype=np.int64)
-        # Remap trimap values {1,2,3} → {1,0,2}
-        remapped = np.zeros_like(mask_np)
-        for src, dst in self._TRIMAP_MAP.items():
-            remapped[mask_np == src] = dst
-        return torch.from_numpy(remapped)
-
-    def _load_bbox(self, stem: str, img_w: int, img_h: int):
+        # 2. Parse bounding box
         xml_path = self.xml_dir / f"{stem}.xml"
         if not xml_path.exists():
-            return torch.tensor([0.5, 0.5, 1.0, 1.0], dtype=torch.float32)
-        cx, cy, w, h = _parse_bbox_xml(str(xml_path), img_w, img_h)
-        # Clamp to [0,1] — some annotations slightly exceed image bounds
-        cx = float(np.clip(cx, 0.0, 1.0))
-        cy = float(np.clip(cy, 0.0, 1.0))
-        w  = float(np.clip(w,  0.0, 1.0))
-        h  = float(np.clip(h,  0.0, 1.0))
-        return torch.tensor([cx, cy, w, h], dtype=torch.float32)
-
-    #  public API 
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        stem, class_idx = self.samples[idx]
-
-        # --- image ---
-        img = self._load_image(stem)
-        orig_w, orig_h = img.size
-        bbox = self._load_bbox(stem, orig_w, orig_h)
-
-        # --- optional custom transform (e.g. albumentations) ---
-        if self.transform is not None:
-            # caller must handle resizing inside their transform
-            img_tensor = self.transform(img)
+            bbox = torch.tensor([0.5, 0.5, 1.0, 1.0], dtype=torch.float32)
         else:
-            # basic resize + optional augmentation
+            cx, cy, w, h = _parse_bbox_xml(str(xml_path), orig_w, orig_h)
+            bbox = torch.tensor([
+                np.clip(cx, 0.0, 1.0),
+                np.clip(cy, 0.0, 1.0),
+                np.clip(w,  0.0, 1.0),
+                np.clip(h,  0.0, 1.0)
+            ], dtype=torch.float32)
+
+        # 3. Process mask: resize to target size & remap trimap values {1,2,3} → {1,0,2}
+        mask = mask.resize((self.img_size, self.img_size), Image.NEAREST)
+        mask_np = np.array(mask, dtype=np.int64)
+        remapped_mask = np.zeros_like(mask_np)
+        for src, dst in self._TRIMAP_MAP.items():
+            remapped_mask[mask_np == src] = dst
+        mask_tensor = torch.from_numpy(remapped_mask)
+
+        # 4. Image transforms & augmentations
+        if self.custom_transform is not None:
+            # Caller handles complex logic (e.g. albumentations bounding box / mask tracking)
+            img_tensor = self.custom_transform(img)
+        else:
             img = img.resize((self.img_size, self.img_size), Image.BILINEAR)
+            
+            # Basic data augmentation
             if self.augment and torch.rand(1).item() > 0.5:
                 img = TF.hflip(img)
-                # flip bbox cx
-                bbox[0] = 1.0 - bbox[0]
+                mask_tensor = torch.flip(mask_tensor, dims=[1]) # FIXED: Mask needs flipping too!
+                bbox[0] = 1.0 - bbox[0]                         # Flip bbox cx
+                
             img_tensor = TF.to_tensor(img)
             img_tensor = TF.normalize(
                 img_tensor,
@@ -179,35 +117,60 @@ class OxfordIIITPetDataset(Dataset):
                 std=[0.229, 0.224, 0.225],
             )
 
-        # --- mask ---
-        mask = self._load_mask(stem, self.img_size)
-
         return {
-            "image"     : img_tensor,            # (3, H, W) float
-            "label"     : torch.tensor(class_idx, dtype=torch.long),
-            "bbox"      : bbox,                  # (4,) float, (cx,cy,w,h) in [0,1]
-            "mask"      : mask,                  # (H, W) long, values {0,1,2}
+            "image"     : img_tensor,                               # (3, H, W) float
+            "label"     : torch.tensor(class_idx, dtype=torch.long),# scalar long
+            "bbox"      : bbox,                                     # (4,) float [cx, cy, w, h]
+            "mask"      : mask_tensor,                              # (H, W) long {0, 1, 2}
             "stem"      : stem,
         }
 
 
-#  convenience factory 
+# Convenience factory
+def build_dataloaders(root: str, img_size: int = 224, batch_size: int = 32, num_workers: int = 4):
+    """
+    Downloads/loads data and returns (train_loader, val_loader, test_loader).
+    Splits the official 'trainval' dataset into 85% train and 15% validation.
+    """
+    # Load full train/val split (with download=True so it fetches it if missing)
+    full_trainval_ds = MultiTaskPetDataset(
+        root=root, split="trainval", img_size=img_size, augment=True, download=True
+    )
 
-def build_dataloaders(root: str, img_size: int = 224, batch_size: int = 32,
-                      num_workers: int = 4):
-    """Return (train_loader, val_loader, test_loader)."""
-    from torch.utils.data import DataLoader
-    train_ds = OxfordIIITPetDataset(root, split="train",
-                                    img_size=img_size, augment=True)
-    val_ds   = OxfordIIITPetDataset(root, split="val",   img_size=img_size)
-    test_ds  = OxfordIIITPetDataset(root, split="test",  img_size=img_size)
+    # Calculate lengths for 85/15 split
+    total_trainval = len(full_trainval_ds)
+    train_len = int(0.85 * total_trainval)
+    val_len = total_trainval - train_len
+
+    # 1. Create indices
+    indices = list(range(len(full_trainval_ds)))
+    
+    # 2. Explicitly shuffle indices
+    torch.manual_seed(42)
+    indices = torch.randperm(len(full_trainval_ds)).tolist()
+    
+    # 3. Create subsets based on shuffled indices
+    train_idx = indices[:train_len]
+    val_idx = indices[train_len:]
+    
+    train_ds = torch.utils.data.Subset(full_trainval_ds, train_idx)
+    val_ds = torch.utils.data.Subset(full_trainval_ds, val_idx)
+    
+    # Load test split
+    test_ds = MultiTaskPetDataset(
+        root=root, split="test", img_size=img_size, augment=False, download=True
+    )
+
+    # # Split dataset
+    # generator = torch.Generator().manual_seed(42) # Ensure reproducible splits
+    # train_ds, val_ds = random_split(full_trainval_ds, [train_len, val_len], generator=generator)
+
+    # Disable augmentation for the validation subset
+    val_ds.dataset.augment = False
 
     kwargs = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     train_loader = DataLoader(train_ds, shuffle=True,  **kwargs)
     val_loader   = DataLoader(val_ds,   shuffle=False, **kwargs)
     test_loader  = DataLoader(test_ds,  shuffle=False, **kwargs)
+    
     return train_loader, val_loader, test_loader
-
-
-## Note: This dataloader class is generated by LLMs. All other code in the project
-# is written manually

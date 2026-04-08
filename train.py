@@ -14,9 +14,7 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
 
-    i = 1
     for batch in loader:
-        start_time = time.time()
         images = batch["image"].to(device)
         labels = batch["label"].to(device)
     
@@ -39,10 +37,6 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler):
         preds = logits.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += images.size(0)
-        end_time = time.time()
-        if (i%5 == 1):
-            print(f"Batch {i} done in {end_time-start_time} time")
-        i +=1
 
     train_loss = total_loss/total
     train_acc = correct/total
@@ -59,13 +53,13 @@ def evaluate(model, loader, loss_fn, device):
     all_preds, all_labels = [], []
 
     for batch in loader:
-        images = batch["images"].to(device)
+        images = batch["image"].to(device)
         labels = batch["label"].to(device)
 
         logits = model(images)
         loss = loss_fn(logits, labels)
 
-        total_loss += loss.item() * images.size()
+        total_loss += loss.item() * images.size(0)
         preds = logits.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += images.size(0)

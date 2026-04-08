@@ -1,3 +1,4 @@
 .vscode
-/dataset
+/dataset/
+/dataset2/
 **/__pycache__
