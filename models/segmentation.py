@@ -62,6 +62,71 @@ class DecoderBlock(nn.Module):
 
         return self.conv(x)
 
+class VGG11UNetDecoder(nn.Module):
+    """
+    Unet style VGG11 Decoder Block
+    """
+
+    def __init__(self, num_classes: int = 3):
+        super().__init__()
+        """
+        Channel Layout (in ---> skip ---> out)
+        d5 : 512 ---> 512 ---> 256 (upsample from 7 to 14, skip from b4 pre-pool)
+        d4 : 256 ---> 256 ---> 128 (upsample from 14 to 28, skip from b3 pre-pool)
+        d3 : 128 ---> 128 ---> 64 (upsample from 28 to 56, skip from b2 pre-pool)
+        d2 : 64 ---> 64 ---> 64 (upsample from 56 to 112, skip from b1 pre-pool)
+        d1: 64 ---> 0 ---> 32 (upsample from 112 to 224, no encoder skip here)
+        """
+
+        self.dec5 = DecoderBlock(512, 512, 256)
+        self.dec4 = DecoderBlock(256, 256, 128)
+        self.dec3 = DecoderBlock(128, 128, 64)
+        self.dec2 = DecoderBlock(64, 64, 64)
+
+        # Final Upsample (d1) without skip connections
+        self.d1_ups = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.d1_conv = nn.Sequential(
+            nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, num_classes, kernel_size=1) # 1x1 projection
+        )
+
+        # do init
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out",
+                                        nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+    
+    def forward(self, bottleneck, skips):
+        """
+        skips[0] : (B,  64, 112, 112)
+        skips[1] : (B, 128,  56,  56)
+        skips[2] : (B, 256,  28,  28)
+        skips[3] : (B, 512,  14,  14)
+        bottleneck: (B, 512,   7,   7)
+        """
+
+        s1, s2, s3, s4 = skips
+
+        # Decode
+        d = self.dec5(bottleneck, s4)   # (B, 256,  14, 14)
+        d = self.dec4(d, s3)            # (B, 128,  28, 28)
+        d = self.dec3(d, s2)            # (B,  64,  56, 56)
+        d = self.dec2(d, s1)            # (B,  64, 112, 112)
+
+        d = self.d1_ups(d)      # (B,  32, 224, 224)
+        d = self.d1_conv(d)     # (B, num_classes, 224, 224)
+
+
 class VGG11UNet(nn.Module):
     """U-Net style segmentation network.
     """
@@ -90,43 +155,9 @@ class VGG11UNet(nn.Module):
                 param.requires_grad = False
         
         # ********Decoder******
-        """
-        Channel Layout (in ---> skip ---> out)
-        d5 : 512 ---> 512 ---> 256 (upsample from 7 to 14, skip from b4 pre-pool)
-        d4 : 256 ---> 256 ---> 128 (upsample from 14 to 28, skip from b3 pre-pool)
-        d3 : 128 ---> 128 ---> 64 (upsample from 28 to 56, skip from b2 pre-pool)
-        d2 : 64 ---> 64 ---> 64 (upsample from 56 to 112, skip from b1 pre-pool)
-        d1: 64 ---> 0 ---> 32 (upsample from 112 to 224, no encoder skip here)
-        """
-
-        self.dec5 = DecoderBlock(512, 512, 256)
-        self.dec4 = DecoderBlock(256, 256, 128)
-        self.dec3 = DecoderBlock(128, 128, 64)
-        self.dec2 = DecoderBlock(64, 64, 64)
-
-        # Final Upsample (d1) without skip connections
-        self.d1_ups = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
-        self.d1_conv = nn.Sequential(
-            nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, num_classes, kernel_size=1) # 1x1 projection
-        )
-        # do init
-        
+        self.decoder = VGG11UNetDecoder(num_classes=num_classes)
         self.num_classes = num_classes
-        self._init_weights()
-    
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out",
-                                        nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+
 
     def _encode_with_skips(self, x):
         """
@@ -170,19 +201,9 @@ class VGG11UNet(nn.Module):
         
         # collect encoder skips
         skips, bottleneck = self._encode_with_skips(x)
-        s1, s2, s3, s4 = skips
+        logits = self.decoder(bottleneck, skips)
 
-        # Decode
-        d = self.dec5(bottleneck, s4)   # (B, 256,  14, 14)
-        d = self.dec4(d, s3)            # (B, 128,  28, 28)
-        d = self.dec3(d, s2)            # (B,  64,  56, 56)
-        d = self.dec2(d, s1)            # (B,  64, 112, 112)
-
-        d = self.final_upsample(d)      # (B,  32, 224, 224)
-        d = self.final_conv(d)          # (B, num_classes, 224, 224)
-
-        return d
-
+        return logits
 
     def unfreeze_last_encoder_blocks(self, num_blocks: int = 2):
         """Partial fine-tuning: unfreeze the last 'num_blocks' encoder blocks."""
