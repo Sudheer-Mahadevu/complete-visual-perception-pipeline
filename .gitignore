@@ -2,3 +2,4 @@
 /dataset/
 /dataset2/
 **/__pycache__
+*.pth
