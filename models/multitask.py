@@ -15,10 +15,10 @@ class MultiTaskPerceptionModel(nn.Module):
 
     def __init__(self, num_breeds: int = 37, seg_classes: int = 3, 
                  in_channels: int = 3, dropout_p = 0.5,
-                 classifier_drive_id: str = "classifier.pth", 
-                 localizer_drive_id: str = "localizer.pth", 
-                 unet_drive_id: str = "unet.pth",
-                 weights_dir = None):
+                 classifier_drive_id: str = "1R_eceTm-8bbKkarbxO0jkUqLrllSDVBy", 
+                 localizer_drive_id: str = "1Jm-BW5SmUl_bZDZ9V7ebjgWcCTsGwoFX", 
+                 unet_drive_id: str = "1Lp87qN9qp-KemomiBt369Vp4wTdQhpyl",
+                 weights_dir = "checkpoints"):
         """
         Initialize the shared backbone/heads using these trained weights.
         Args:
@@ -115,9 +115,9 @@ class MultiTaskPerceptionModel(nn.Module):
         # ******* Classification Head *******
         # head.classifier.x ---> cls_head.classifier.x
         cls_head_wts = {
-            k.replace("head", "", 1): v
+            k.replace("head.", "", 1): v
             for k, v in cls_state.items()
-            if k.startswith("head")
+            if k.startswith("head.")
         }
 
         missing, unexpected = self.cls_head.load_state_dict(
@@ -130,9 +130,9 @@ class MultiTaskPerceptionModel(nn.Module):
         # ******* Localization Head *******
         # head.regressor.x ---> loc_head.regressor.x
         loc_head_wts = {
-            k.replace("head", "", 1): v
+            k.replace("head.", "", 1): v
             for k, v in loc_state.items()
-            if k.startswith("head")
+            if k.startswith("head.")
         }
 
         missing, unexpected = self.loc_head.load_state_dict(
@@ -145,9 +145,9 @@ class MultiTaskPerceptionModel(nn.Module):
          # ******* Segmentation Head *******
         # decoder.xyz ---> seg_head.xyz
         seg_head_wts = {
-            k.replace("decoder", "", 1): v
+            k.replace("decoder.", "", 1): v
             for k, v in seg_state.items()
-            if k.startswith("decoder")
+            if k.startswith("decoder.")
         }
 
         missing, unexpected = self.seg_head.load_state_dict(
@@ -158,27 +158,36 @@ class MultiTaskPerceptionModel(nn.Module):
               f"missing={missing} | unexpected={unexpected}")
 
     # Internel Encoder with skip extraction
-    def _encode(self, x: torch.Tensor):
+    def _encode_with_skips(self, x):
         """
-        Run the shared encoder and collect:
-          - skip connections before each max-pool (for the seg decoder)
-          - bottleneck feature map (for all three heads)
+        Run the encoder and collect feature maps before each max-pool.
+        Returns (skips, bottleneck) where:
+          skips[0] : (B,  64, 112, 112)
+          skips[1] : (B, 128,  56,  56)
+          skips[2] : (B, 256,  28,  28)
+          skips[3] : (B, 512,  14,  14)
+          bottleneck: (B, 512,   7,   7)
         """
+
         enc = self.encoder
 
-        def _pre_pool(block, inp):
+        def pre_pool_feat(block, x_in):
+            """Return (feature_before_pool, output_after_pool)."""
+
             layers = list(block.children())
-            feat = nn.Sequential(*layers[:-1])(inp)  # before MaxPool
-            out  = layers[-1](feat)                  # after  MaxPool
-            return feat, out
+            pre = nn.Sequential(*layers[:-1]) # everything except MaxPool
+            pool = layers[-1]
+            feat = pre(x_in)
 
-        s1, x = _pre_pool(enc.block1, x)   # s1: (B,  64, 112, 112)
-        s2, x = _pre_pool(enc.block2, x)   # s2: (B, 128,  56,  56)
-        s3, x = _pre_pool(enc.block3, x)   # s3: (B, 256,  28,  28)
-        s4, x = _pre_pool(enc.block4, x)   # s4: (B, 512,  14,  14)
-        _,  x = _pre_pool(enc.block5, x)   # bottleneck: (B, 512, 7, 7)
+            return feat, pool(feat)
 
-        return [s1, s2, s3, s4], x
+        _, s1 = pre_pool_feat(enc.block1, x)   # s1: (B, 64,  112, 112)
+        _, s2 = pre_pool_feat(enc.block2, s1)   # s2: (B, 128,  56,  56)
+        _, s3 = pre_pool_feat(enc.block3, s2)   # s3: (B, 256,  28,  28)
+        _, s4 = pre_pool_feat(enc.block4, s3)   # s4: (B, 512,  14,  14)
+        _, bottleneck = pre_pool_feat(enc.block5, s4)   # bottleneck: (B, 512, 7, 7)
+
+        return [s1, s2, s3, s4], bottleneck
 
 
     def forward(self, x: torch.Tensor):
@@ -192,7 +201,7 @@ class MultiTaskPerceptionModel(nn.Module):
             - 'segmentation': [B, seg_classes, H, W] segmentation logits tensor
         """
         
-        skips, bottleneck = self._encode(x)
+        skips, bottleneck = self._encode_with_skips(x)
 
         logits = {}
         logits["classification"] = self.cls_head(bottleneck)          

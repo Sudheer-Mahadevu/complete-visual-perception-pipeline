@@ -179,7 +179,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Task 1.2 – Localization")
     parser.add_argument("--data_root",    type=str,   default='dataset')
-    parser.add_argument("--cls_ckpt",       type=str,   default="checkpoints/best_classifier.pth")
+    parser.add_argument("--cls_ckpt",       type=str,   default="checkpoints/classifier.pth")
     parser.add_argument("--freeze_encoder", action="store_true", default=True)
     parser.add_argument("--unfreeze_epoch", type=int,   default=None,
                         help="Epoch at which to unfreeze the encoder (optional)")
@@ -190,5 +190,5 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers",    type=int,   default=4)
     parser.add_argument("--save_dir",       type=str,   default="checkpoints")
     parser.add_argument("--use_wandb",      action="store_true")
-    parser.add_argument("--model_name",   type=str,   default='best_localizer.pth')
+    parser.add_argument("--model_name",   type=str,   default='localizer.pth')
     main(parser.parse_args())

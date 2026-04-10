@@ -88,7 +88,8 @@ def main(args):
     )
 
     # model
-    model = VGG11Classifier(num_classes=37, dropout_p=args.dropout_p).to(device)
+    model = VGG11Classifier(num_classes=37, dropout_p=args.dropout_p,
+                            pretrained=args.pretrained).to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=0.1) # Why
@@ -144,5 +145,6 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers",  type=int,   default=4)
     parser.add_argument("--save_dir",     type=str,   default="checkpoints")
     parser.add_argument("--use_wandb",    action="store_true")
-    parser.add_argument("--model_name",   type=str,   default='best_classifer.pth')
+    parser.add_argument("--model_name",   type=str,   default='classifer.pth')
+    parser.add_argument("--pretrained",   type=bool,   default=False)
     main(parser.parse_args())

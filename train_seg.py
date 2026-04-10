@@ -197,7 +197,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Task 1.3 - Segmentation")
     parser.add_argument("--data_root",    type=str,   default='dataset')
-    parser.add_argument("--cls_ckpt",     type=str,   default="checkpoints/best_classifier.pth")
+    parser.add_argument("--cls_ckpt",     type=str,   default="checkpoints/classifier.pth")
     parser.add_argument("--freeze_mode",  type=str,   default="partial",
                         choices=["strict", "partial", "full"])
     parser.add_argument("--epochs",       type=int,   default=30)
@@ -207,5 +207,5 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers",  type=int,   default=4)
     parser.add_argument("--save_dir",     type=str,   default="checkpoints")
     parser.add_argument("--use_wandb",    action="store_true")
-    parser.add_argument("--model_name",   type=str,   default='best_unet.pth')
+    parser.add_argument("--model_name",   type=str,   default='unet.pth')
     main(parser.parse_args())
