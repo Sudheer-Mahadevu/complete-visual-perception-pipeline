@@ -44,9 +44,9 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler):
 
     return train_loss, train_acc
 
-
-@torch.no_grad() # this decorator makes the evaluate function to run without 
+# this decorator makes the evaluate function to run without 
 # autograd of the nn
+@torch.no_grad() 
 def evaluate(model, loader, loss_fn, device):
     model.eval()
 
