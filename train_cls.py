@@ -120,7 +120,7 @@ def main(args):
         end_time = time.time()
         print(
             f"Epoch {epoch:03d}/{args.epochs}  "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f}, time={end_time-start_time}  "
+            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f}, time={(end_time-start_time):.2f}  "
             f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_f1={val_f1:.4f}"
         )
 
@@ -129,7 +129,7 @@ def main(args):
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             torch.save(model.state_dict(),
-                       os.path.join(args.save_dir, "best_classifier.pth"))
+                       os.path.join(args.save_dir, args.model_name))
             print(f"Saved best model with val_f1: {val_f1:.4f}")
 
 
@@ -144,4 +144,5 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers",  type=int,   default=4)
     parser.add_argument("--save_dir",     type=str,   default="checkpoints")
     parser.add_argument("--use_wandb",    action="store_true")
+    parser.add_argument("--model_name",   type=str,   default='best_classifer.pth')
     main(parser.parse_args())

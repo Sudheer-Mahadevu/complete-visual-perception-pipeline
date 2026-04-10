@@ -69,7 +69,7 @@ class VGG11Localizer(nn.Module):
     """VGG11-based localizer."""
 
     def __init__(self, in_channels: int = 3, dropout_p: float = 0.5, 
-                 pretained_features = None, freeze_encoder = True):
+                 pretrained_features = None, freeze_encoder = True):
         """
         Initialize the VGG11Localizer model.
 
@@ -79,7 +79,7 @@ class VGG11Localizer(nn.Module):
         """
         super().__init__()
 
-        self.encoder = pretained_features if pretained_features is not None \
+        self.encoder = pretrained_features if pretrained_features is not None \
                                           else VGG11Encoder()
         
         if freeze_encoder:
@@ -111,3 +111,29 @@ class VGG11Localizer(nn.Module):
     def freeze_encoder(self):
         for param in self.encoder.parameters():
             param.requires_grad = False
+
+
+class LocalizationLoss(nn.Module):
+    """
+    Combined loss = IoU loss + L1 loss.
+
+    Using only IoU loss can be unstable when IoU is near 0 (flat gradient).
+    Adding L1 provides a smooth gradient signal even for non-overlapping
+    boxes, improving convergence speed.
+
+    Args:
+        iou_weight (float): weight for the IoU term (default 1.0)
+        l1_weight  (float): weight for the L1 term  (default 0.5)
+    """
+
+    def __init__(self, iou_weight: float = 1.0, l1_weight: float = 0.5):
+        super().__init__()
+        self.iou_loss   = IoULoss()
+        self.l1_loss    = nn.SmoothL1Loss()
+        self.iou_weight = iou_weight
+        self.l1_weight  = l1_weight
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        iou = self.iou_loss(pred, target)
+        l1  = self.l1_loss(pred, target)
+        return self.iou_weight * iou + self.l1_weight * l1
