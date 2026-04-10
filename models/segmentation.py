@@ -11,8 +11,8 @@ class DecoderBlock(nn.Module):
     def __init__(self, ch_in, ch_skip, ch_out):
         super().__init__()
 
-        # Learnable 2x unsampling
-        self.unsample = nn.ConvTranspose2d(
+        # Learnable 2x upsampling
+        self.upsample = nn.ConvTranspose2d(
             ch_in, ch_in//2, kernel_size=2, stride=2
         )
 
@@ -126,6 +126,7 @@ class VGG11UNetDecoder(nn.Module):
         d = self.d1_ups(d)      # (B,  32, 224, 224)
         d = self.d1_conv(d)     # (B, num_classes, 224, 224)
 
+        return d
 
 class VGG11UNet(nn.Module):
     """U-Net style segmentation network.
@@ -182,13 +183,13 @@ class VGG11UNet(nn.Module):
 
             return feat, pool(feat)
 
-        s1, x = pre_pool_feat(enc.block1, x)   # s1: (B, 64,  112, 112)
-        s2, x = pre_pool_feat(enc.block2, x)   # s2: (B, 128,  56,  56)
-        s3, x = pre_pool_feat(enc.block3, x)   # s3: (B, 256,  28,  28)
-        s4, x = pre_pool_feat(enc.block4, x)   # s4: (B, 512,  14,  14)
-        _,  x = pre_pool_feat(enc.block5, x)   # bottleneck: (B, 512, 7, 7)
+        _, s1 = pre_pool_feat(enc.block1, x)   # s1: (B, 64,  112, 112)
+        _, s2 = pre_pool_feat(enc.block2, s1)   # s2: (B, 128,  56,  56)
+        _, s3 = pre_pool_feat(enc.block3, s2)   # s3: (B, 256,  28,  28)
+        _, s4 = pre_pool_feat(enc.block4, s3)   # s4: (B, 512,  14,  14)
+        _, bottleneck = pre_pool_feat(enc.block5, s4)   # bottleneck: (B, 512, 7, 7)
 
-        return [s1, s2, s3, s4], x
+        return [s1, s2, s3, s4], bottleneck
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for segmentation model.
@@ -262,8 +263,8 @@ class DiceLoss(nn.Module):
         num_classes = logits.shape[1]
         probs = torch.softmax(logits, dim = 1) # (B, C, H, W)
 
-        targs_one_hot = F.one_hot(targets, num_classes) #(B, C, H, W)
-        targs_one_hot = targs_one_hot.permute(0, 3, 1, 2).float() #(B, W, C, H)?
+        targs_one_hot = F.one_hot(targets, num_classes) #(B, H, W, C)
+        targs_one_hot = targs_one_hot.permute(0, 3, 1, 2).float() #(B, C, H, W)
 
         # Flatten Spatial dims
         probs_flat = probs.view(probs.shape[0], num_classes, -1)
