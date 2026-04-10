@@ -18,4 +18,5 @@ __all__ = [
     "VGG11Localizer",
     "VGG11UNet",
     "MultiTaskPerceptionModel",
+    "LocalizationLoss",
 ]

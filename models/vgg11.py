@@ -61,7 +61,7 @@ class VGG11Encoder(nn.Module):
     
     def _load_pretrained_weights(self):
         """Loads weights from torchvision's vgg11_bn."""
-        print("Loading ImageNet weights for VGG11Encoder...")
+        # print("Loading ImageNet weights for VGG11Encoder...")
         vgg_imagenet = vgg11_bn(weights=VGG11_BN_Weights.IMAGENET1K_V1)
         
         # Flatten our custom blocks into a single list of layers

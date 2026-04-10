@@ -52,7 +52,7 @@ class IoULoss(nn.Module):
         # Clip it to zero if no overlap happens
         inter_w = (inter_x2-inter_x1).clip(min=0.0)
         inter_h = (inter_y2-inter_y1).clip(min=0.0)
-        inter_area = inter_w + inter_h
+        inter_area = inter_w * inter_h
 
         # Calculate Area of Union
         # Clip to Zero for cases when inside-out coordinate are given 
