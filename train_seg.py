@@ -112,6 +112,7 @@ def main(args):
         img_size=224,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        task='segmentation'
     )
 
     # encoder
@@ -149,7 +150,12 @@ def main(args):
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr, weight_decay=args.weight_decay,
     )
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, 
+    mode='min',       # 'min' because we want to monitor validation LOSS
+    factor=0.1,      # Reduce LR by 10x (5e-4 -> 5e-5)
+    patience=10,       # How many epochs to wait without improvement before dropping
+    )
     scaler    = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
 
     if args.use_wandb:
@@ -168,7 +174,7 @@ def main(args):
             model, train_loader, optimizer, criterion, device, scaler)
         val_loss, val_dice, val_pa = evaluate(
             model, val_loader, criterion, device)
-        scheduler.step()
+        lr_scheduler.step(val_loss)
 
         end_time = time.time()
         print(

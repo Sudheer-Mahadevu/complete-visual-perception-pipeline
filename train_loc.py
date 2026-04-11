@@ -104,6 +104,7 @@ def main(args):
         img_size=224,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        task = 'localization'
     )
 
     # encoder: load from classification checkpoint if provided

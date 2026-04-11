@@ -6,9 +6,11 @@ from PIL import Image
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
-import torchvision.transforms as T  # <--- CHANGED: Imported transforms
+import torchvision.transforms as T
 from torchvision.datasets import OxfordIIITPet
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
+import random
+from torchvision.transforms import v2
 
 
 def _parse_bbox_xml(xml_path: str, img_w: int, img_h: int):
@@ -42,7 +44,8 @@ class MultiTaskPetDataset(OxfordIIITPet):
         img_size: int = 224,
         transform = None,
         augment: bool = False,
-        download: bool = True
+        download: bool = True,
+        task = 'classification'
     ):
         super().__init__(root, split=split, target_types=['category', 'segmentation'], download=download)
         self.img_size  = img_size
@@ -50,6 +53,7 @@ class MultiTaskPetDataset(OxfordIIITPet):
         self.augment   = augment and (transform is None)
         self.base_folder = Path(self._base_folder)
         self.xml_dir = self.base_folder / "annotations" / "xmls"
+        self.task = task
 
     def __getitem__(self, idx: int):
         img, (class_idx, mask) = super().__getitem__(idx)
@@ -81,38 +85,55 @@ class MultiTaskPetDataset(OxfordIIITPet):
         else:
             img = img.resize((self.img_size, self.img_size), Image.BILINEAR)
             
-            # --- CHANGED: Enhanced Augmentation Block ---
             if self.augment:
-                # 1. Geometric: Horizontal Flip
                 if torch.rand(1).item() > 0.5:
                     img = TF.hflip(img)
-                    mask_tensor = torch.flip(mask_tensor, dims=[1])
-                    bbox[0] = 1.0 - bbox[0]
-                
-                # 2. Photometric: Color Jitter (Varies lighting and colors)
-                # This does not affect bounding boxes or segmentation masks
-                jitter = T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1)
-                img = jitter(img)
-                
-                # 3. Photometric: Random Grayscale (Helps network focus on shapes over colors)
-                if torch.rand(1).item() > 0.8:
-                    img = TF.to_grayscale(img, num_output_channels=3)
-            # --------------------------------------------
-                
-            img_tensor = TF.to_tensor(img)
-            img_tensor = TF.normalize(
-                img_tensor,
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            )
+                    if self.task == 'segmentation':
+                        mask_tensor = TF.hflip(mask_tensor)
+                    if self.task == 'localization':
+                        bbox[0] = 1.0 - bbox[0]
 
-            # --- CHANGED: Tensor-level Augmentation ---
-            if self.augment:
-                # 4. Random Erasing (Extremely effective for preventing VGG/ResNet overfitting)
-                # It drops out random rectangular patches of the image tensor
-                eraser = T.RandomErasing(p=0.4, scale=(0.02, 0.2), ratio=(0.3, 3.3), value='random')
-                img_tensor = eraser(img_tensor)
-            # ------------------------------------------
+                # --- 2. Task-Specific Geometric: Random Resized Crop ---
+                if self.task == 'classification':
+                    cropper = T.RandomResizedCrop(size=(224, 224), scale=(0.4, 1.0))
+                    img = cropper(img)
+                
+                # --- 3. random  rotation +- 15 degrees
+                if self.task in ['classification', 'segmentation']:
+                    angle = random.uniform(-15, 15)
+                    
+                    img = TF.rotate(img, angle)
+                    if self.task == 'segmentation':
+                    # Add batch dim: [C, H, W] -> [1, C, H, W]
+                        mask_tensor = mask_tensor.unsqueeze(0)
+                        mask_tensor = TF.rotate(
+                            mask_tensor, 
+                            angle, 
+                            interpolation=v2.InterpolationMode.NEAREST
+                        )
+                        mask_tensor = mask_tensor.squeeze(0) # Back to [C, H, W]
+
+                # --- 4. Photometric: Color Jitter & Grayscale ---
+                if self.task != 'segmentation':
+                    jitter = T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1)
+                    img = jitter(img)
+                    
+                    if torch.rand(1).item() > 0.8:
+                        img = TF.to_grayscale(img, num_output_channels=3)
+            
+        
+        #Convert to Tensor and Normalize
+        img_tensor = TF.to_tensor(img)
+        img_tensor = TF.normalize(
+            img_tensor,
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        )
+
+        # --- 5. Tensor-level: Random Erasing ---
+        if self.augment and self.task == 'classification':
+            eraser = T.RandomErasing(p=0.4, scale=(0.02, 0.2), ratio=(0.3, 3.3), value='random')
+            img_tensor = eraser(img_tensor)
 
         return {
             "image"     : img_tensor,
@@ -122,37 +143,52 @@ class MultiTaskPetDataset(OxfordIIITPet):
             "stem"      : stem,
         }
 
+from torch.utils.data import ConcatDataset, DataLoader, Subset
+import torch
 
-def build_dataloaders(root: str, img_size: int = 224, batch_size: int = 32, num_workers: int = 4):
+def build_dataloaders(root: str, img_size: int = 224, batch_size: int = 32, num_workers: int = 4, task = 'classification'):
     """
-    Downloads/loads data and returns (train_loader, val_loader, test_loader).
+    Dynamically pools data based on task requirements.
+    Localization: Uses only trainval split (3680 images) due to annotation availability.
+    Other: Uses full dataset (~7349 images).
     """
-    # --- CHANGED: Fixed the Subset Bug by creating two independent dataset instances ---
-    # Previously, setting val_ds.dataset.augment = False turned off train augmentation too!
-    trainval_base_aug   = MultiTaskPetDataset(root=root, split="trainval", img_size=img_size, augment=True, download=True)
-    trainval_base_noaug = MultiTaskPetDataset(root=root, split="trainval", img_size=img_size, augment=False, download=False)
-    # ---------------------------------------------------------------------------------
-
-    total_trainval = len(trainval_base_aug)
-    train_len = int(0.85 * total_trainval)
     
-    indices = list(range(total_trainval))
+    # 1. Always load the trainval split (has labels, masks, and bboxes)
+    trainval_aug   = MultiTaskPetDataset(root=root, split="trainval", img_size=img_size, augment=True, download=True, task=task)
+    trainval_noaug = MultiTaskPetDataset(root=root, split="trainval", img_size=img_size, augment=False, download=False, task=task)
+
+    if task == 'localization':
+        # Localization ONLY has valid bboxes in the trainval split
+        full_pool_aug   = trainval_aug
+        full_pool_noaug = trainval_noaug
+        print(f"Localization task detected: Using only trainval split ({len(full_pool_aug)} images).")
+    else:
+        # For Classification/Segmentation, use EVERYTHING
+        test_aug       = MultiTaskPetDataset(root=root, split="test", img_size=img_size, augment=True, download=True, task=task)
+        test_noaug     = MultiTaskPetDataset(root=root, split="test", img_size=img_size, augment=False, download=False, task=task)
+        
+        full_pool_aug   = ConcatDataset([trainval_aug, test_aug])
+        full_pool_noaug = ConcatDataset([trainval_noaug, test_noaug])
+        print(f"{task.capitalize()} task detected: Using full merged dataset ({len(full_pool_aug)} images).")
+
+    # 2. Create the 85/15 Split
+    total_images = len(full_pool_aug)
+    train_len = int(0.85 * total_images)
+    
     torch.manual_seed(42)
-    indices = torch.randperm(total_trainval).tolist()
+    indices = torch.randperm(total_images).tolist()
     
     train_idx = indices[:train_len]
-    val_idx = indices[train_len:]
+    val_idx   = indices[train_len:]
     
-    # --- CHANGED: Assign indices to the correct base dataset ---
-    train_ds = torch.utils.data.Subset(trainval_base_aug, train_idx)
-    val_ds   = torch.utils.data.Subset(trainval_base_noaug, val_idx)
-    # -----------------------------------------------------------
+    # 3. Create Subsets
+    train_ds = Subset(full_pool_aug, train_idx)
+    val_ds   = Subset(full_pool_noaug, val_idx)
     
-    test_ds = MultiTaskPetDataset(root=root, split="test", img_size=img_size, augment=False, download=True)
-
     kwargs = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=True)
-    train_loader = DataLoader(train_ds, shuffle=True,  **kwargs)
-    val_loader   = DataLoader(val_ds,   shuffle=False, **kwargs)
-    test_loader  = DataLoader(test_ds,  shuffle=False, **kwargs)
     
-    return train_loader, val_loader, test_loader
+    return (
+        DataLoader(train_ds, shuffle=True,  **kwargs),
+        DataLoader(val_ds,   shuffle=False, **kwargs),
+        None  # Test loader is None because we merged the test split into our training pool
+    )

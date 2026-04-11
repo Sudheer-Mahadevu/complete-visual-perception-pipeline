@@ -85,6 +85,7 @@ def main(args):
         img_size = 224,
         batch_size= args.batch_size,
         num_workers = args.num_workers,
+        task='classification'
     )
 
     # model
@@ -95,7 +96,12 @@ def main(args):
     loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=0.1) # Why
     optimizer = optim.AdamW(model.parameters(), lr = args.lr,
                             weight_decay=args.weight_decay)
-    lr_scheduler = CosineAnnealingLR(optimizer, T_max = args.epochs, eta_min=1e-6) #TODO
+    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, 
+    mode='min',       # 'min' because we want to monitor validation LOSS
+    factor=0.1,      # Reduce LR by 10x (5e-4 -> 5e-5)
+    patience=10,       # How many epochs to wait without improvement before dropping
+    )
 
     # TODO
     scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
@@ -116,7 +122,7 @@ def main(args):
         train_loss, train_acc = train_one_epoch(
             model, train_loader, optimizer, loss_fn, device, scaler)
         val_loss, val_acc, val_f1 = evaluate(model, val_loader, loss_fn, device)
-        lr_scheduler.step()
+        lr_scheduler.step(val_loss)
 
         end_time = time.time()
         print(

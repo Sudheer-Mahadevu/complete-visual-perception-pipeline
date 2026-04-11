@@ -19,24 +19,18 @@ class ClassificationHead(nn.Module):
         # If the image size is different, to make sure that FC layers always get
         # H,W = 7,7 we do average pooling: This is not there is vgg11 architectue
 
-        self.avgpool = nn.AdaptiveAvgPool2d((7,7))
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
 
         self.classifier = nn.Sequential(
-                # FC1 : 512*7*7 -> 4096 with BN and Dropout
+                # FC1 : 512 -> 256 with BN and Dropout
                 nn.Flatten(),
-                nn.Linear(512* 7 * 7, 4096, bias = False),
-                nn.BatchNorm1d(4096),
-                nn.ReLU(4096),
+                nn.Linear(512, 256, bias = False),
+                nn.BatchNorm1d(256),
+                nn.ReLU(256),
                 CustomDropout(p=dropout_p),
 
-                # FC2 : 4096 -> 4096 with BN, Dropout
-                nn.Linear(4096, 4096, bias = False),
-                nn.BatchNorm1d(4096),
-                nn.ReLU(4096),
-                CustomDropout(p=dropout_p),
-
-                # FC3: 4096 -> num_classes
-                nn.Linear(4096, num_classes),
+                # FC2: 256 -> num_classes
+                nn.Linear(256, num_classes),
         )
         
         # Initialize weights
@@ -48,6 +42,7 @@ class ClassificationHead(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
+        print(f"Initialized GAP, FC(256), FC(37) Classifier Head")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.avgpool(x)

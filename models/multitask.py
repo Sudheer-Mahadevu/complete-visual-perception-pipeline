@@ -204,8 +204,9 @@ class MultiTaskPerceptionModel(nn.Module):
         skips, bottleneck = self._encode_with_skips(x)
 
         logits = {}
-        logits["classification"] = self.cls_head(bottleneck)          
-        logits["localization"]       = self.loc_head(bottleneck)    
+        logits["classification"] = self.cls_head(bottleneck)
+        # Normalize back to image coordinates           
+        logits["localization"]       = self.loc_head(bottleneck) * 224    
         logits["segmentation"] = self.seg_head(bottleneck, skips)
 
         return logits
