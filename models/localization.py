@@ -13,7 +13,7 @@ class LocalizationHead(nn.Module):
     Regression head that maps (B, 512, 7, 7) feature map to (B,4)
     """
 
-    def __init__(self, droput=0.3):
+    def __init__(self, dropout=[0.2, 0.1]):
         super().__init__()
 
         # Options:  AAP(7,7) --> 512 --> 256 --> 4 (High Resolution,Risk of Overfitting)
@@ -30,12 +30,12 @@ class LocalizationHead(nn.Module):
             nn.Linear(512* 5* 5, 512, bias= False),
             nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
-            CustomDropout(p=0.5),         # More Dropout for parameter heavy layer
+            CustomDropout(p=dropout[0]),         # More Dropout for parameter heavy layer
 
             nn.Linear(512, 256, bias=False),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            CustomDropout(p=0.2),         # Lesser Droput for the penultimate layer
+            CustomDropout(p=dropout[1]),         # Lesser Droput for the penultimate layer
 
             nn.Linear(256, 4),
             nn.Sigmoid(),
@@ -68,7 +68,7 @@ class LocalizationHead(nn.Module):
 class VGG11Localizer(nn.Module):
     """VGG11-based localizer."""
 
-    def __init__(self, in_channels: int = 3, dropout_p: float = 0.5, 
+    def __init__(self, in_channels: int = 3, dropout_p=[0.2, 0.1], 
                  pretrained_features = None, freeze_encoder = True):
         """
         Initialize the VGG11Localizer model.
@@ -86,7 +86,7 @@ class VGG11Localizer(nn.Module):
             for param in self.encoder.parameters():
                 param.requires_grad = False
 
-        self.head = LocalizationHead()
+        self.head = LocalizationHead(dropout=dropout_p)
         
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

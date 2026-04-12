@@ -124,6 +124,7 @@ def main(args):
     model = VGG11Localizer(
         pretrained_features=features,
         freeze_encoder=args.freeze_encoder,
+        dropout_p= args.dropout_p
     ).to(device)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -134,7 +135,12 @@ def main(args):
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr, weight_decay=args.weight_decay,
     )
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, 
+    mode='min',       # 'min' because we want to monitor validation LOSS
+    factor=0.1,      # Reduce LR by 10x (5e-4 -> 5e-5)
+    patience=10,       # How many epochs to wait without improvement before dropping
+    )
 
     # optional W&B
     if args.use_wandb:
@@ -147,15 +153,31 @@ def main(args):
 
     for epoch in range(1, args.epochs + 1):
         start_time = time.time()
+
         # Optional: unfreeze encoder after warm-up
         if args.unfreeze_epoch and epoch == args.unfreeze_epoch:
             model.unfreeze_encoder()
-            print(f"Unfreezing encoder at epoch {epoch}")
+            
+            # 1. New Optimizer: includes all params now that requires_grad=True
+            optimizer = optim.AdamW(
+                model.parameters(), 
+                lr=1e-4, 
+                weight_decay=args.weight_decay
+            )
+            
+            # 2. New Scheduler: starts fresh at 1e-4
+            lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.1, patience=10
+            )
+            
+            print(f"--- Transitioned to Phase 2: Full Model Fine-tuning at LR 1e-4 ---")
+            print(f"Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+
 
         train_loss, train_iou = train_one_epoch(
             model, train_loader, optimizer, criterion, device)
         val_loss, val_iou = evaluate(model, val_loader, criterion, device)
-        scheduler.step()
+        lr_scheduler.step(val_loss)
         end_time = time.time()
         print(
             f"Epoch {epoch:03d}/{args.epochs}  "
@@ -182,11 +204,12 @@ if __name__ == "__main__":
     parser.add_argument("--data_root",    type=str,   default='dataset')
     parser.add_argument("--cls_ckpt",       type=str,   default="checkpoints/classifier.pth")
     parser.add_argument("--freeze_encoder", action="store_true", default=True)
-    parser.add_argument("--unfreeze_epoch", type=int,   default=None,
+    parser.add_argument("--unfreeze_epoch", type=int,   default=15,
                         help="Epoch at which to unfreeze the encoder (optional)")
     parser.add_argument("--epochs",         type=int,   default=20)
     parser.add_argument("--batch_size",     type=int,   default=32)
     parser.add_argument("--lr",             type=float, default=1e-3)
+    parser.add_argument("--dropout_p", type=float, nargs='+', default=[0.2, 0.1])
     parser.add_argument("--weight_decay",   type=float, default=1e-4)
     parser.add_argument("--num_workers",    type=int,   default=4)
     parser.add_argument("--save_dir",       type=str,   default="checkpoints")
