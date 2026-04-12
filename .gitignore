@@ -4,3 +4,6 @@
 **/__pycache__
 *.pth
 experiments.py
+api_keys.py
+/wandb
+/novel_images
