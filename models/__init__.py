@@ -10,6 +10,7 @@ from .segmentation import VGG11UNet
 from .vgg11 import VGG11Encoder
 from .multitask import MultiTaskPerceptionModel
 from .localization import LocalizationLoss
+from .classification_nobn import VGG11ClassifierNoBN
 
 __all__ = [
     "CustomDropout",
@@ -19,4 +20,5 @@ __all__ = [
     "VGG11UNet",
     "MultiTaskPerceptionModel",
     "LocalizationLoss",
+    "VGG11ClassifierNoBN"
 ]

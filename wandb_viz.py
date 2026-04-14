@@ -131,6 +131,105 @@ def make_feature_grid(feat_map_np: np.ndarray, max_ch: int = 32,
     return fig
 
 
+# ********** Experiment 2.1 — Activation distributions  (BN vs No-BN) ***
+
+def exp_2_1(args):
+    """
+    W&B Section 2.1 — Compare 3rd-conv activation distributions WITH vs WITHOUT BN.
+
+    What is logged:
+        activations/with_bn_histogram      : wandb.Histogram of 3rd-conv activations
+        activations/no_bn_histogram        : same layer, model without BN
+        activations/bn_vs_no_bn_comparison : side-by-side matplotlib histogram
+
+    The '3rd convolutional layer' in VGG11 is block3[0]  (128→256 conv), which
+    is the first _conv_bn_relu inside block3.
+    """
+    import wandb
+    from models import VGG11Classifier
+    from models.classification_nobn import VGG11ClassifierNoBN
+    from data.pets_dataset_aug import build_dataloaders
+
+    wandb.init(project="da6401-a2", name="exp_2_1_activation_dist",
+               tags=["analysis", "batch_norm"], config=vars(args))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load both models
+    model_bn    = VGG11Classifier(num_classes=37).to(device)
+    model_no_bn = VGG11ClassifierNoBN(num_classes=37).to(device)
+
+    if args.bn_ckpt and os.path.exists(args.bn_ckpt):
+        model_bn.load_state_dict(
+            torch.load(args.bn_ckpt, map_location=device), strict=True)
+        print(f"Loaded BN model from {args.bn_ckpt}")
+    else:
+        print("WARNING: no BN checkpoint found — using random weights")
+
+    if args.no_bn_ckpt and os.path.exists(args.no_bn_ckpt):
+        model_no_bn.load_state_dict(
+            torch.load(args.no_bn_ckpt, map_location=device), strict=True)
+        print(f"Loaded No-BN model from {args.no_bn_ckpt}")
+    else:
+        print("WARNING: no No-BN checkpoint found — using random weights")
+
+    model_bn.eval();    model_no_bn.eval()
+
+    # Get ONE fixed batch (same input for both models — required by the assignment)
+    _, val_loader, _ = build_dataloaders(args.data_root, img_size=224,
+                                         batch_size=64, num_workers=args.num_workers)
+    fixed_batch = next(iter(val_loader))["image"].to(device)
+
+    # ── Hook function ─────────────────────────────────────────────────────────
+    def capture_activations(model) -> np.ndarray:
+        """Register hook on block3[0], run one forward pass, return flat numpy."""
+        store = {}
+
+        def _hook(m, inp, out):
+            store["act"] = out.detach().cpu().float()
+
+        # block3[0] is the _conv_bn_relu (or _conv_relu) Sequential = Conv 3
+        handle = model.features.block3[0].register_forward_hook(_hook)
+        with torch.no_grad():
+            _ = model(fixed_batch)
+        handle.remove()
+        return store["act"].numpy().flatten()
+
+    act_bn    = capture_activations(model_bn)
+    act_no_bn = capture_activations(model_no_bn)
+
+    # ── Log individual histograms ─────────────────────────────────────────────
+    wandb.log({
+        "activations/with_bn_histogram" : wandb.Histogram(act_bn,    num_bins=64),
+        "activations/no_bn_histogram"   : wandb.Histogram(act_no_bn, num_bins=64),
+    })
+
+    # ── Log side-by-side matplotlib comparison ────────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=False)
+
+    axes[0].hist(act_bn,    bins=100, color="#2196F3", alpha=0.8, density=True)
+    axes[0].set_title("3rd Conv Activations — WITH BatchNorm", fontsize=11)
+    axes[0].set_xlabel("Activation value");  axes[0].set_ylabel("Density")
+    axes[0].axvline(0, color="k", linestyle="--", linewidth=0.8)
+
+    axes[1].hist(act_no_bn, bins=100, color="#F44336", alpha=0.8, density=True)
+    axes[1].set_title("3rd Conv Activations — WITHOUT BatchNorm", fontsize=11)
+    axes[1].set_xlabel("Activation value")
+    axes[1].axvline(0, color="k", linestyle="--", linewidth=0.8)
+
+    stats_text = (
+        f"BN    — mean={act_bn.mean():.3f}  std={act_bn.std():.3f}\n"
+        f"No-BN — mean={act_no_bn.mean():.3f}  std={act_no_bn.std():.3f}"
+    )
+    fig.text(0.5, -0.02, stats_text, ha="center", fontsize=9, style="italic")
+    plt.tight_layout()
+
+    wandb.log({"activations/bn_vs_no_bn_comparison": wandb.Image(fig)})
+    plt.close(fig)
+
+    print("Experiment 2.1 logged successfully.")
+    wandb.finish()
+
 # ********************* Experiment 2.4 
 # Feature map visualizationFeature map visualization ******************
 
@@ -255,9 +354,6 @@ def exp_2_4(args):
 
     print("Experiment 2.4 logged successfully.")
     wandb.finish()
-
-def exp_2_1():
-    pass
 
 
 # Experiment 2.5 — Object detection table
@@ -402,9 +498,7 @@ def exp_2_5(args):
     print("Experiment 2.5 logged successfully.")
     wandb.finish()
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Experiment 2.6 — Segmentation visualization
-# ─────────────────────────────────────────────────────────────────────────────
 
 def exp_2_6(args):
     """
@@ -513,9 +607,7 @@ def exp_2_6(args):
     print("Experiment 2.6 logged successfully.")
     wandb.finish()
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Experiment 2.7 — Pipeline showcase on novel images
-# ─────────────────────────────────────────────────────────────────────────────
 
 # Oxford-IIIT Pet Dataset — 37 breed names in class-index order
 _PET_BREEDS = [
